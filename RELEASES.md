@@ -72,6 +72,38 @@ Actualizar esta sección con:
 
 ## 📋 Historial de Releases
 
+### v1_2026-09-10
+**Fecha:** 2026-09-10
+**Descripción:** Release inicial - Simulacion lecho irregular y seleccion de punto de muestreo
+**Módulos Incluidos:**
+- `NodoBoya_v6_2026-09-01.ino`
+- `NodoTierra_v17_2026-09-01.ino`
+
+**Cambios Principales:**
+- [Agregar lista de cambios principales]
+
+**Descarga:** `releases/SistemaCompleto_v1_2026-09-10.zip` (54K)
+
+---
+
+---
+
+
+### v1_2026-09-10
+**Fecha:** 2026-09-10
+**Descripción:** Release inicial - Simulación lecho irregular y selección de punto de muestreo
+**Módulos Incluidos:**
+- `(basename /workspace/NodoBoya_v6_2026-09-01.ino)`
+- `(basename /workspace/NodoTierra_v17_2026-09-01.ino)`
+- `(basename /workspace/NodoBoya_v5_2026-08-30.ino)`
+**Cambios Principales:**
+- [Agregar lista de cambios principales]
+
+**Descarga:** `releases/SistemaCompleto_v1_2026-09-10.zip` (64K)
+
+---
+
+
 ### v1_2026-09-01 (Release Inicial)
 **Fecha:** 01 de Septiembre, 2026  
 **Módulos Incluidos:**
