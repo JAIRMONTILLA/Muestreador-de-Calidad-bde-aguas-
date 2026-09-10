@@ -1878,6 +1878,21 @@ void pantalla_plano_cartesiano(const DatosBoya_t& datos) {
   tft.fillCircle(46, 122, 2, ST77XX_BLUE);  tft.setTextColor(ST77XX_BLUE);   tft.setCursor(51, 119); tft.print("Calado");
   tft.fillCircle(94, 122, 2, ST77XX_WHITE); tft.setTextColor(ST77XX_WHITE);  tft.setCursor(99, 119); tft.print("Carro");
 
+
+  // Indicador de punto de muestreo seleccionado
+  if (g_puntoMuestreoSeleccionado) {
+    tft.setTextColor(ST77XX_GREEN);
+    tft.setCursor(2, 135);
+    tft.print("Pto.Muestra: X=");
+    tft.print(g_puntoMuestreoX, 1);
+    tft.print("m Prof=");
+    tft.print(g_puntoMuestreoProfundidad, 0);
+    tft.print("cm");
+  } else {
+    tft.setTextColor(COLOR_ACENTO);
+    tft.setCursor(2, 135);
+    tft.print("OK=elegir pto.muestra");
+  }
   // Simbolo de fase activa (sonda midiendo / purgando / tomando muestra)
   uint16_t colorBadge = COLOR_ACENTO;
   bool mostrarBadge = true;
@@ -2367,6 +2382,46 @@ bool nube_subir(const DatosBoya_t& d) {
 // Genera una telemetria de ejemplo con valores que varian suavemente en
 // el tiempo, solo para poder ver y navegar las pantallas sin depender de
 // que la Boya este encendida o configurada.
+//
+// *** VERSION MEJORADA: incluye simulacion de lecho irregular con
+// multiple armonicos y soporte para seleccion de punto de muestreo ***
+
+#define NUM_ARMONICOS_LECHO 5
+static float g_armonicosAmplitud[NUM_ARMONICOS_LECHO] = {8.0f, 5.0f, 3.0f, 2.0f, 1.5f};
+static float g_armonicosFrecuencia[NUM_ARMONICOS_LECHO] = {0.3f, 0.7f, 1.2f, 2.1f, 3.5f};
+static float g_armonicosFase[NUM_ARMONICOS_LECHO] = {0.0f, 1.2f, 2.4f, 0.8f, 1.9f};
+
+// Calcula el perfil del lecho usando suma de armonicos para simular
+// irregularidades naturales (rocas, sedimentos, erosion)
+float calcularPerfilLecho(float x_m) {
+  float profundidad = 45.0f; // profundidad base promedio (cm)
+  for (int i = 0; i < NUM_ARMONICOS_LECHO; i++) {
+    profundidad += g_armonicosAmplitud[i] * sin(g_armonicosFrecuencia[i] * x_m + g_armonicosFase[i]);
+  }
+  // Añadir pequeña variacion aleatoria suave (ruido de medicion natural)
+  profundidad += ((float)random(-20, 21)) / 10.0f;
+  return constrain(profundidad, 20.0f, 75.0f); // rango fisico realista
+}
+
+// Punto de toma de muestra seleccionado por el usuario
+static bool g_puntoMuestreoSeleccionado = false;
+static float g_puntoMuestreoX = 0.0f;
+static float g_puntoMuestreoProfundidad = 0.0f;
+static uint8_t g_profundidadMuestreoSeleccion = 60; // cm, por defecto 60% de la columna
+
+void resetearSimulacionLecho() {
+  g_trazaCount = 0;
+  g_trazaInicio = 0;
+  g_ultimoXRegistrado = -999.0f;
+  g_puntoMuestreoSeleccionado = false;
+  g_puntoMuestreoX = 0.0f;
+  g_puntoMuestreoProfundidad = 0.0f;
+  // Re-generar fases aleatorias para los armonicos para tener lechos diferentes
+  for (int i = 0; i < NUM_ARMONICOS_LECHO; i++) {
+    g_armonicosFase[i] = ((float)random(0, 360)) / 180.0f * PI;
+  }
+}
+
 DatosBoya_t generarDatoPrueba() {
   DatosBoya_t d = {};
   float t = millis() / 1000.0f;
@@ -2383,7 +2438,28 @@ DatosBoya_t generarDatoPrueba() {
   d.timestamp          = millis() / 1000;
   d.latitud            = 0.0f;
   d.longitud           = 0.0f;
-  d.profundidad_cm     = 60.0f + 10.0f * sin(t / 5.0f) + ruidoCol;
+  
+  // GPS simulado: avance continuo y uniforme para mostrar el desplazamiento
+  static float avanceSimulado = 0.0f;
+  static unsigned long ultimoPasoGps = 0;
+  if (millis() - ultimoPasoGps > 500) {
+    ultimoPasoGps = millis();
+    avanceSimulado += 0.08f + ((float)random(0, 20)) / 100.0f; // avance ~8-10 cm por paso
+    if (avanceSimulado > 25.0f) avanceSimulado = 0.0f; // ciclo cada ~25m
+  }
+  d.gps_avance_m = avanceSimulado;
+  
+  // Calcular perfil de lecho irregular basado en la posicion X actual
+  float perfilLecho = calcularPerfilLecho(avanceSimulado);
+  d.columna_total_cm = perfilLecho;
+  
+  // Profundidad de muestreo: usa el punto seleccionado si existe, sino 60%
+  if (g_puntoMuestreoSeleccionado) {
+    d.profundidad_cm = g_puntoMuestreoProfundidad;
+  } else {
+    d.profundidad_cm = d.columna_total_cm * 0.6f;
+  }
+  
   d.ph                 = 7.2f  + 0.3f  * sin(t / 7.0f) + ruidoPh;
   d.conductividad_us   = 350.0f + 20.0f * sin(t / 9.0f) + ruidoCond;
   d.oxigeno_disuelto   = 6.5f  + 0.5f  * sin(t / 6.0f) + ruidoOd;
@@ -2396,23 +2472,16 @@ DatosBoya_t generarDatoPrueba() {
   // buzzer y la barra roja de alerta sin necesidad de la Boya encendida.
   d.error_flags        = (((unsigned long)t) % 30 < 4) ? 0x01 : 0;
   d.paquetes_perdidos  = 0;
-  d.columna_total_cm   = 95.0f + 5.0f * sin(t / 6.0f) + ruidoCol;
-  d.calado_boya_cm     = 12.0f + 2.0f * sin(t / 5.0f) + ruidoCal;
+  
+  // Calado de boya (relacionado con la profundidad total)
+  d.calado_boya_cm     = 12.0f + (perfilLecho * 0.12f) + ruidoCal;
+  
+  // Posicion del carro/sonda - sigue la profundidad seleccionada
   d.pos_carro_cm       = d.profundidad_cm;
+  
   d.estado_dispositivos = BIT_ASCENSOR_OK | BIT_BOMBA_PURGA_OK | BIT_BOMBA_MUESTREO_OK |
                            BIT_SENSOR_PH_OK | BIT_SENSOR_COND_OK | BIT_SENSOR_TURBIDEZ_OK |
                            BIT_SENSOR_TEMP_OK | BIT_US1_OK | BIT_US2_OK | BIT_US3_OK;
-
-  // GPS simulado: avanza con pasos aleatorios (mismo criterio que el
-  // simulador del Nodo Boya), para ver el trazado del lecho moverse.
-  static float avanceSimulado = 0.0f;
-  static unsigned long ultimoPasoGps = 0;
-  if (millis() - ultimoPasoGps > 500) {
-    ultimoPasoGps = millis();
-    avanceSimulado += ((float)random(-20, 51)) / 100.0f;
-    if (avanceSimulado < 0) avanceSimulado = 0;
-  }
-  d.gps_avance_m = avanceSimulado;
 
   // Ciclo simulado de fases (~4 s cada una), para probar los simbolos de
   // actuador activo en el plano cartesiano sin la Boya real conectada.
@@ -2421,7 +2490,6 @@ DatosBoya_t generarDatoPrueba() {
 
   return d;
 }
-
 // ======================================================================
 // PROGRAMA PRINCIPAL (setup/loop, menu)  (fuente: NodoTierra.ino)
 // ======================================================================
@@ -2739,8 +2807,6 @@ void loop() {
       }
       // UP/DOWN en esta pantalla no hacen nada por ahora (reservado a futuro,
       // por ejemplo para desplazarse entre varias lecturas historicas)
-      break;
-
     case UI_PLANO:
       if (b == BOTON_ATRAS) {
         estadoActual = UI_MENU;
@@ -2748,11 +2814,38 @@ void loop() {
         return;
       }
       if (b == BOTON_OK) {
+        // Si no hay punto seleccionado, permitir elegir la profundidad actual como punto de muestreo
+        if (!g_puntoMuestreoSeleccionado && hayDatoValido) {
+          g_puntoMuestreoX = ultimoDato.gps_avance_m;
+          g_puntoMuestreoProfundidad = ultimoDato.profundidad_cm;
+          g_puntoMuestreoSeleccionado = true;
+          Serial.printf(\"[UI] Punto de muestreo seleccionado: X=%.1fm Prof=%.0fcm\\n\", 
+                        g_puntoMuestreoX, g_puntoMuestreoProfundidad);
+          // Redibujar para mostrar el nuevo estado
+          pantalla_plano_cartesiano(ultimoDato);
+          return;
+        } else if (g_puntoMuestreoSeleccionado) {
+          // Ya hay punto seleccionado -> proceder con la selección del protocolo
+          Serial.println(\"[UI] Punto de muestreo confirmado - listo para seleccionar protocolo\");
+          estadoActual = UI_ESTADO;
+          pantalla_estado(ultimoDato, espnow_enlace_activo() || g_modoPrueba, almacenamiento_ok());
+          return;
+        }
         estadoActual = UI_ESTADO;
         pantalla_estado(ultimoDato, espnow_enlace_activo() || g_modoPrueba, almacenamiento_ok());
         return;
       }
+      // UP/DOWN para ajustar la profundidad del punto de muestreo (si está seleccionado)
+      if (b == BOTON_ARRIBA || b == BOTON_ABAJO) {
+        if (g_puntoMuestreoSeleccionado) {
+          int delta = (b == BOTON_ARRIBA) ? 5 : -5;
+          g_puntoMuestreoProfundidad = constrain((int)g_puntoMuestreoProfundidad + delta, 10, 120);
+          Serial.printf(\"[UI] Profundidad ajustada a %.0f cm\\n\", g_puntoMuestreoProfundidad);
+          // Redibujar para mostrar el cambio
+          if (hayDatoValido) pantalla_plano_cartesiano(ultimoDato);
+          return;
+        }
+      }
       break;
-  }
 }
 
